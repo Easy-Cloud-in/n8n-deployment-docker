@@ -1,0 +1,228 @@
+version: '3'
+
+x-condition-definitions:
+  traefik-condition: ${DEPLOYMENT_TYPE:-local} == traefik || ${DEPLOYMENT_TYPE:-local} == production
+  non-traefik-condition: ${DEPLOYMENT_TYPE:-local} != traefik && ${DEPLOYMENT_TYPE:-local} != production
+  s3-condition: ${DEPLOYMENT_TYPE:-local} == s3 || ${DEPLOYMENT_TYPE:-local} == production
+
+volumes:
+  n8n_storage:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/n8n-data/n8n
+  postgres_storage:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/n8n-data/postgres
+  qdrant_storage:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/n8n-data/qdrant
+  traefik_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/n8n-data/traefik
+
+networks:
+  n8n-network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16
+  traefik-public:
+    driver: bridge
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: n8n-postgres
+    networks: ['n8n-network']
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_MAX_CONNECTIONS=${POSTGRES_MAX_CONNECTIONS:-100}
+      - POSTGRES_SHARED_BUFFERS=${POSTGRES_SHARED_BUFFERS:-2GB}
+      - POSTGRES_EFFECTIVE_CACHE_SIZE=${POSTGRES_EFFECTIVE_CACHE_SIZE:-6GB}
+    volumes:
+      - postgres_storage:/var/lib/postgresql/data
+      - /opt/n8n-data/postgres-backup:/backup
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    networks: ['n8n-network']
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_USER=${POSTGRES_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_USER_MANAGEMENT_JWT_SECRET=${N8N_USER_MANAGEMENT_JWT_SECRET}
+      - N8N_HOST=${N8N_HOST:-localhost}
+      - N8N_PORT=${N8N_PORT:-5678}
+      - N8N_PROTOCOL=${N8N_PROTOCOL:-http}
+      - N8N_BASIC_AUTH_ACTIVE=${N8N_BASIC_AUTH_ACTIVE:-false}
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:-}
+    restart: unless-stopped
+    ports:
+      - '${N8N_PORT:-5678}:5678'
+    volumes:
+      - n8n_storage:/home/node/.n8n
+      - /opt/n8n-data/n8n-backup:/backup
+      - /opt/n8n-data/shared:/data/shared
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:5678/healthz']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
+    labels:
+      - 'traefik.enable=true'
+      - 'traefik.http.routers.n8n.rule=Host(`${DOMAIN_NAME}`)'
+      - 'traefik.http.routers.n8n.entrypoints=websecure'
+      - 'traefik.http.routers.n8n.tls.certresolver=letsencrypt'
+      - 'traefik.http.services.n8n.loadbalancer.server.port=5678'
+
+  qdrant:
+    image: qdrant/qdrant
+    container_name: n8n-qdrant
+    networks: ['n8n-network']
+    restart: unless-stopped
+    ports:
+      - '6333:6333'
+    volumes:
+      - qdrant_storage:/qdrant/storage
+      - /opt/n8n-data/qdrant-backup:/backup
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:6333/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
+
+  backup-scheduler:
+    image: amazon/aws-cli:latest
+    container_name: n8n-backup-scheduler
+    volumes:
+      - /opt/n8n-data:/opt/n8n-data
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME}
+    entrypoint: /bin/sh
+    command:
+      - '-c'
+      - |
+        yum update -y && yum install -y cronie postgresql15 tar gzip jq
+        echo "0 0 * * * /opt/n8n-data/backup-s3.sh >> /opt/n8n-data/backup.log 2>&1" > /var/spool/cron/root
+        crond -n -s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      n8n:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'ps aux | grep crond | grep -v grep || exit 1']
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    networks: ['n8n-network']
+    profiles:
+      - s3
+      - production
+
+  traefik:
+    image: traefik:v2.9
+    container_name: n8n-traefik
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    networks:
+      - n8n-network
+      - traefik-public
+    volumes:
+      - traefik_data:/etc/traefik
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command:
+      - '--api.dashboard=true'
+      - '--api.insecure=false'
+      - '--providers.docker=true'
+      - '--providers.docker.exposedbydefault=false'
+      - '--entrypoints.web.address=:80'
+      - '--entrypoints.websecure.address=:443'
+      - '--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}'
+      - '--certificatesresolvers.letsencrypt.acme.storage=/etc/traefik/acme.json'
+      - '--certificatesresolvers.letsencrypt.acme.httpchallenge=true'
+      - '--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web'
+      - '--entrypoints.web.http.redirections.entrypoint.to=websecure'
+      - '--entrypoints.web.http.redirections.entrypoint.scheme=https'
+      - '--log.level=${TRAEFIK_LOG_LEVEL:-INFO}'
+      - '--accesslog=true'
+      - '--ping=true'
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8080/ping']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    labels:
+      - 'traefik.enable=true'
+      - 'traefik.http.routers.traefik-dashboard.rule=Host(`traefik.${DOMAIN_NAME}`)'
+      - 'traefik.http.routers.traefik-dashboard.entrypoints=websecure'
+      - 'traefik.http.routers.traefik-dashboard.tls.certresolver=letsencrypt'
+      - 'traefik.http.routers.traefik-dashboard.service=api@internal'
+      - 'traefik.http.routers.traefik-dashboard.middlewares=traefik-auth'
+      - 'traefik.http.middlewares.traefik-auth.basicauth.users=${TRAEFIK_DASHBOARD_AUTH}'
+    profiles:
+      - traefik
+      - production

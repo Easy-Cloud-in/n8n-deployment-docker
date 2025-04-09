@@ -1,0 +1,89 @@
+# Environment files
+.env
+s3.env
+*.env
+
+# Backup directories and files
+/opt/n8n-data/
+**/n8n-backup/
+**/postgres-backup/
+**/qdrant-backup/
+*.sql
+*.tar.gz
+*.log
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Editor directories and files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Temporary files
+/tmp/
+*.tmp
+*.temp
+
+# Container related
+.podman/
+.docker/
+podman_data/
+volumes/
+
+# Node.js related (if you have any custom scripts)
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# Certificate files (if you're using SSL/TLS)
+*.pem
+*.key
+*.crt
+*.cer
+*.csr
+*.pfx
+
+# Traefik specific
+acme.json
+*.toml.bak
+
+# n8n specific
+.n8n/
+**/data/
+
+# Secrets and generated files
+**/secrets/
+generated-*
+*_generated.*
+*_credentials.*
+*.secret
+*.key.json
+*.credentials.json
+
+# Logs beyond what's already covered
+logs/
+*.log.*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local development overrides
+docker-compose.override.yml
+podman-compose.override.yml
+*.local.yml
+*.local.yaml
+*.local.json
+*.local.conf
+
+# Monitoring configurations
+monitoring-stack.yml
+**/monitoring/
+
+# Temporary credential files
+*.tmp.env
+*_temp_creds*

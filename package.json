@@ -1,0 +1,39 @@
+{
+  "name": "n8n-deployment-docker",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prepare": "husky",
+    "lint:md": "markdownlint '**/*.md' --ignore node_modules",
+    "lint:sh": "find . -name '*.sh' -not -path './node_modules/*' -exec shellcheck {} \\;"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.6.5",
+  "devDependencies": {
+    "@commitlint/cli": "^19.8.0",
+    "@commitlint/config-conventional": "^19.8.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.0",
+    "markdownlint-cli": "^0.44.0",
+    "prettier": "^3.5.3"
+  },
+  "lint-staged": {
+    "*.md": [
+      "markdownlint",
+      "prettier --write"
+    ],
+    "*.yml": [
+      "prettier --write"
+    ],
+    "*.sh": [
+      "bash -c \"command -v shellcheck >/dev/null && shellcheck {} || echo 'WARNING: shellcheck not installed, skipping shell script linting'\""
+    ],
+    "*.{json,js}": [
+      "prettier --write"
+    ]
+  }
+}
