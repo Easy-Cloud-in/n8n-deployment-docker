@@ -13,7 +13,7 @@ fi
 
 # Configuration
 BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
-BACKUP_ROOT="/opt/n8n-data"
+BACKUP_ROOT="${BASE_DIR}"
 RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-7}
 
 # Load environment variables if available

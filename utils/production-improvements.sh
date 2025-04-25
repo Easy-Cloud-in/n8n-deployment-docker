@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 # Configuration
-PRODUCTION_DIR="/opt/n8n-data/production"
+PRODUCTION_DIR="${BASE_DIR}/production"
 MONITORING_DIR="${PRODUCTION_DIR}/monitoring"
 CONFIG_DIR="${PRODUCTION_DIR}/config"
 DOMAIN_NAME=${DOMAIN_NAME:-"localhost"}

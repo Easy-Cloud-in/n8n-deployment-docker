@@ -22,7 +22,7 @@ check_disk_space 1000  # Require 1GB free
 
 # Check backup status
 check_recent_backup() {
-    find "/opt/n8n-data" -name "backup_*.log" -mtime -1 | grep -q .
+    find "${BASE_DIR}" -name "backup_*.log" -mtime -1 | grep -q .
     if [ $? -ne 0 ]; then
         error "No recent backup found in the last 24 hours"
         return 1

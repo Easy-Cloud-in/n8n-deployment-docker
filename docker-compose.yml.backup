@@ -1,44 +1,40 @@
 version: '3'
 
-# Note: This file was generated based on refactoring suggestions.
-# The original file is backed up as docker-compose.yml.backup
-
 volumes:
   n8n_storage:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ${BASE_DIR}/n8n # Use BASE_DIR variable
+      device: ${BASE_DIR}/n8n
   postgres_storage:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ${BASE_DIR}/postgres # Use BASE_DIR variable
+      device: ${BASE_DIR}/postgres
   qdrant_storage:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ${BASE_DIR}/qdrant # Use BASE_DIR variable
+      device: ${BASE_DIR}/qdrant
   traefik_data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ${BASE_DIR}/traefik # Use BASE_DIR variable
+      device: ${BASE_DIR}/traefik
 
 networks:
   n8n-network:
     driver: bridge
-    # Removed IPAM config to let Docker manage the subnet
   traefik-public:
     driver: bridge
 
 services:
   postgres:
-    image: postgres:16-alpine # Pinned version
+    image: postgres:16-alpine
     container_name: n8n-postgres
     networks: ['n8n-network']
     restart: unless-stopped
@@ -51,7 +47,7 @@ services:
       - POSTGRES_EFFECTIVE_CACHE_SIZE=${POSTGRES_EFFECTIVE_CACHE_SIZE:-6GB}
     volumes:
       - postgres_storage:/var/lib/postgresql/data
-      - ${BASE_DIR}/postgres-backup:/backup # Using BASE_DIR for host path
+      - ${BASE_DIR}/postgres-backup:/backup
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
       interval: 10s
@@ -66,7 +62,7 @@ services:
           memory: 1G
 
   n8n:
-    image: n8nio/n8n:1.89.2 # Pinned version
+    image: n8nio/n8n:1.89.2
     container_name: n8n
     networks: ['n8n-network']
     environment:
@@ -88,8 +84,8 @@ services:
       - '${N8N_PORT:-5678}:5678'
     volumes:
       - n8n_storage:/home/node/.n8n
-      - ${BASE_DIR}/n8n-backup:/backup # Using BASE_DIR for host path
-      - ${BASE_DIR}/shared:/data/shared # Using BASE_DIR for host path
+      - ${BASE_DIR}/n8n-backup:/backup
+      - ${BASE_DIR}/shared:/data/shared
     depends_on:
       postgres:
         condition: service_healthy
@@ -105,7 +101,7 @@ services:
           memory: 4G
         reservations:
           memory: 1G
-    labels: # Traefik labels for routing
+    labels:
       - 'traefik.enable=true'
       - 'traefik.http.routers.n8n.rule=Host(`${DOMAIN_NAME}`)'
       - 'traefik.http.routers.n8n.entrypoints=websecure'
@@ -113,7 +109,7 @@ services:
       - 'traefik.http.services.n8n.loadbalancer.server.port=5678'
 
   qdrant:
-    image: qdrant/qdrant:v1.8.3 # Pinned version
+    image: qdrant/qdrant:v1.8.3
     container_name: n8n-qdrant
     networks: ['n8n-network']
     restart: unless-stopped
@@ -121,7 +117,7 @@ services:
       - '6333:6333'
     volumes:
       - qdrant_storage:/qdrant/storage
-      - ${BASE_DIR}/qdrant-backup:/backup # Using BASE_DIR for host path
+      - ${BASE_DIR}/qdrant-backup:/backup
     healthcheck:
       test: ['CMD', 'curl', '-f', 'http://localhost:6333/health']
       interval: 30s
@@ -136,17 +132,12 @@ services:
           memory: 1G
 
   backup-scheduler:
-    build: # Build from local Dockerfile
+    build:
       context: ./dockerfiles/backup-scheduler
-      args: # Pass the ARG to the Dockerfile
-        AWS_CLI_VERSION: 2.17.11
     container_name: n8n-backup-scheduler
     volumes:
-      # Mount the entire BASE_DIR to access data and backup script
       - ${BASE_DIR}:${BASE_DIR}
-      # Mount the backup script itself from the s3 directory
-      # Make sure the path inside the container matches the entrypoint script
-      - ./s3/backup-s3.sh:${BASE_DIR}/s3/backup-s3.sh:ro
+      - ./s3/backup-s3.sh:/opt/n8n-data/s3/backup-s3.sh:ro
       - /etc/localtime:/etc/localtime:ro
     environment:
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
@@ -156,9 +147,7 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
       - S3_BUCKET_NAME=${S3_BUCKET_NAME}
-      # Pass BASE_DIR into the container for the entrypoint script
       - BASE_DIR=${BASE_DIR}
-    # entrypoint/command handled by Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
@@ -174,12 +163,12 @@ services:
       start_period: 40s
     restart: unless-stopped
     networks: ['n8n-network']
-    profiles: # Only run this service if s3 or production profile is active
+    profiles:
       - s3
       - production
 
   traefik:
-    image: traefik:v2.9 # Pinned version
+    image: traefik:v2.9
     container_name: n8n-traefik
     restart: unless-stopped
     ports:
@@ -193,34 +182,34 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     command:
       - '--api.dashboard=true'
-      - '--api.insecure=false' # Use dashboard over HTTPS
+      - '--api.insecure=false'
       - '--providers.docker=true'
-      - '--providers.docker.exposedbydefault=false' # Explicitly enable services via labels
+      - '--providers.docker.exposedbydefault=false'
       - '--entrypoints.web.address=:80'
       - '--entrypoints.websecure.address=:443'
       - '--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}'
       - '--certificatesresolvers.letsencrypt.acme.storage=/etc/traefik/acme.json'
       - '--certificatesresolvers.letsencrypt.acme.httpchallenge=true'
       - '--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web'
-      - '--entrypoints.web.http.redirections.entrypoint.to=websecure' # Redirect HTTP to HTTPS
+      - '--entrypoints.web.http.redirections.entrypoint.to=websecure'
       - '--entrypoints.web.http.redirections.entrypoint.scheme=https'
       - '--log.level=${TRAEFIK_LOG_LEVEL:-INFO}'
       - '--accesslog=true'
-      - '--ping=true' # Enable health check endpoint
+      - '--ping=true'
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8080/ping']
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
-    labels: # Traefik labels for the dashboard itself
+    labels:
       - 'traefik.enable=true'
       - 'traefik.http.routers.traefik-dashboard.rule=Host(`traefik.${DOMAIN_NAME}`)'
       - 'traefik.http.routers.traefik-dashboard.entrypoints=websecure'
       - 'traefik.http.routers.traefik-dashboard.tls.certresolver=letsencrypt'
       - 'traefik.http.routers.traefik-dashboard.service=api@internal'
-      - 'traefik.http.routers.traefik-dashboard.middlewares=traefik-auth' # Enable basic auth
-      - 'traefik.http.middlewares.traefik-auth.basicauth.users=${TRAEFIK_DASHBOARD_AUTH}' # Define auth users
-    profiles: # Only run this service if traefik or production profile is active
+      - 'traefik.http.routers.traefik-dashboard.middlewares=traefik-auth'
+      - 'traefik.http.middlewares.traefik-auth.basicauth.users=${TRAEFIK_DASHBOARD_AUTH}'
+    profiles:
       - traefik
       - production

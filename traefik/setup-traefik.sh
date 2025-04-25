@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../utils/common.sh"
 
 # Configuration
-TRAEFIK_DIR="/opt/n8n-data/traefik"
+TRAEFIK_DIR="${BASE_DIR}/traefik"
 
 # Function to display help
 show_help() {

@@ -116,6 +116,12 @@ sudo ./setup.sh --type production --domain n8n.yourdomain.com --email your@email
 
 All configuration is managed through a single `.env` file. An example with all available options is provided in `.env.example`.
 
+**Key Configuration:**
+
+- `BASE_DIR`: Specifies the root directory on the host machine where all persistent data (database, n8n data, backups, logs) will be stored. Defaults to `/opt/n8n-data` if not set.
+- `DEPLOYMENT_TYPE`: Determines which services and features are enabled (e.g., `local`, `s3`, `traefik`, `production`).
+- Other variables control database credentials, S3 details, Traefik settings, etc.
+
 The setup script will automatically generate secure credentials and create the necessary configuration based on your selected deployment type.
 
 ### Manual Configuration
@@ -123,44 +129,52 @@ The setup script will automatically generate secure credentials and create the n
 If you want to manually configure the deployment:
 
 1. Copy the example environment file: `cp .env.example .env`
-2. Edit the `.env` file to set your desired configuration
+2. Edit the `.env` file, paying close attention to `BASE_DIR` and other settings relevant to your chosen `DEPLOYMENT_TYPE`.
 3. Run the setup script with the `--no-interactive` flag: `sudo ./setup.sh --no-interactive`
 
 ## Backup and Restore
 
 ### Automatic Backups
 
-Backups are automatically configured based on your deployment type:
+When using the `s3` or `production` deployment types, the `backup-scheduler` service automatically runs daily (at midnight server time) using the script located at `./s3/backup-s3.sh`. Backups are uploaded to the configured S3 bucket.
 
-- **Local Deployment**: Daily backups stored in `/opt/n8n-data/`
-- **S3 Deployment**: Daily backups uploaded to your S3 bucket
-- **Production Deployment**: Daily backups uploaded to your S3 bucket with HTTPS access
+- **Local Backups:** While the `backup-scheduler` primarily focuses on S3, temporary backup files might be created within your `${BASE_DIR}` during the process before being uploaded.
+- **Retention:** Backup retention within S3 is typically managed by the `backup-s3.sh` script or S3 lifecycle policies (check the script for details).
 
-### Manual Backup
+### Manual Backup (S3/Production Profiles)
 
-To trigger a manual backup:
+To trigger a manual backup when the `backup-scheduler` service is running:
 
 ```bash
-# For local deployment
-sudo /opt/n8n-data/backup.sh
-
-# For S3 deployment
-sudo /opt/n8n-data/backup-s3.sh
+# Execute the backup script inside the running container
+sudo docker exec n8n-backup-scheduler sh -c "${BASE_DIR}/s3/backup-s3.sh"
 ```
+
+*Note: Ensure the `BASE_DIR` variable is correctly set in your `.env` file, as it's passed into the container.*
 
 ### Restoring from Backup
 
-To restore from a backup:
+Restoration typically involves retrieving the desired backup archive from S3 and using the `restore-s3.sh` script.
+
+1.  **Download Backup:** Manually download the required backup archive (e.g., `n8n-backup-YYYYMMDD_HHMMSS.tar.gz`) from your S3 bucket to your host machine.
+2.  **Run Restore Script:** Execute the restore script, providing the path to the downloaded archive. You might need to run this within a temporary container that has access to Docker and the necessary tools (like `psql`, `tar`, `docker`).
 
 ```bash
-# For local backup
-sudo /opt/n8n-data/restore.sh --backup-id YYYYMMDD_HHMMSS
-
-# For S3 backup
-sudo /opt/n8n-data/restore-s3.sh --backup-id YYYYMMDD_HHMMSS
+# Example (conceptual - exact command might vary depending on restore script logic):
+# You might need to adapt this or use a dedicated helper container
+sudo docker run --rm -it --network n8n-network \
+  -v $(pwd)/n8n-backup-YYYYMMDD_HHMMSS.tar.gz:/tmp/backup.tar.gz \
+  -v ${BASE_DIR}:${BASE_DIR} \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e POSTGRES_USER=${POSTGRES_USER} \
+  -e POSTGRES_PASSWORD=${POSTGRES_PASSWORD} \
+  -e POSTGRES_DB=${POSTGRES_DB} \
+  --entrypoint sh \
+  amazon/aws-cli:2.17.11 \
+  ./s3/restore-s3.sh --backup-file /tmp/backup.tar.gz
 ```
 
-Replace `YYYYMMDD_HHMMSS` with the timestamp of the backup you want to restore.
+*Consult the `./s3/restore-s3.sh` script for its specific usage and requirements.* The exact restore procedure depends heavily on the script's implementation.
 
 ## Troubleshooting
 
@@ -170,15 +184,16 @@ Replace `YYYYMMDD_HHMMSS` with the timestamp of the backup you want to restore.
 
    - Check logs: `sudo docker logs n8n`
    - Verify PostgreSQL is running: `sudo docker ps | grep postgres`
-   - Ensure environment variables are set correctly in `.env`
+   - Ensure environment variables are set correctly in `.env`, especially `BASE_DIR`.
 
 2. **Backup fails**:
 
-   - Check disk space: `df -h /opt/n8n-data`
-   - For S3 backups, verify AWS credentials and bucket permissions
+   - Check `backup-scheduler` logs: `sudo docker logs n8n-backup-scheduler`
+   - Verify S3 credentials, bucket permissions, and region in `.env`.
+   - Check available space within the `${BASE_DIR}` on the host if temporary files are large: `df -h ${BASE_DIR}`
 
 3. **Traefik SSL certificate issues**:
-   - Ensure your domain points to the server's IP
+   - Ensure your domain (`DOMAIN_NAME` in `.env`) points correctly to the server's public IP address.
    - Check Traefik logs: `sudo docker logs n8n-traefik`
 
 For more detailed troubleshooting information, see the [Troubleshooting Guide](troubleshooting-guide.md).
@@ -189,9 +204,11 @@ Check the following logs for troubleshooting:
 
 - n8n logs: `sudo docker logs n8n`
 - PostgreSQL logs: `sudo docker logs n8n-postgres`
+- Qdrant logs: `sudo docker logs n8n-qdrant`
+- Backup Scheduler logs: `sudo docker logs n8n-backup-scheduler` (includes cron output)
 - Traefik logs: `sudo docker logs n8n-traefik`
-- Deployment log: `/opt/n8n-data/deployment.log`
-- Backup log: `/opt/n8n-data/backup.log`
+- Deployment log: Check within `${BASE_DIR}/deployment.log` (if created by setup script)
+- Backup log: Check within `${BASE_DIR}/backup.log` (created by backup script)
 
 ## Removing n8n
 

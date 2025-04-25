@@ -283,17 +283,17 @@ verify_directories() {
     
     # Define expected directories - with more flexible permissions
     local expected_dirs=(
-        "/opt/n8n-data/n8n:::"
-        "/opt/n8n-data/postgres:::"
-        "/opt/n8n-data/qdrant:::"
-        "/opt/n8n-data/shared:::"
-        "/opt/n8n-data/postgres-backup:::"
-        "/opt/n8n-data/n8n-backup:::"
+        "${BASE_DIR}/n8n:::"
+        "${BASE_DIR}/postgres:::"
+        "${BASE_DIR}/qdrant:::"
+        "${BASE_DIR}/shared:::"
+        "${BASE_DIR}/postgres-backup:::"
+        "${BASE_DIR}/n8n-backup:::"
     )
     
     # Add traefik directory for traefik and production deployments
     if [[ "$DEPLOYMENT_TYPE" == "traefik" || "$DEPLOYMENT_TYPE" == "production" ]]; then
-        expected_dirs+=("/opt/n8n-data/traefik:::")
+        expected_dirs+=("${BASE_DIR}/traefik:::")
     fi
     
     # Check each expected directory

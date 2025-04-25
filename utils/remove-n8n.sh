@@ -56,57 +56,83 @@ check_requirements() {
 # Function to remove containers
 remove_containers() {
     log "Stopping and removing containers..."
-    
-    # Stop containers in each deployment directory
-    for dir in "${DEPLOYMENT_DIRS[@]}"; do
-        if [ -f "${SCRIPT_DIR}/../${dir}/docker-compose.yml" ]; then
-            cd "${SCRIPT_DIR}/../${dir}" || {
-                error "Failed to change directory to ${SCRIPT_DIR}/../${dir}"
-                continue
-            }
-            log "Stopping containers in ${dir}..."
-            docker compose down
-            handle_error $? "Failed to stop containers in ${dir}"
-        fi
-    done
-    
-    # Remove any remaining n8n related containers
-    containers=$(docker ps -a | grep 'n8n-' | awk '{print $1}')
-    if [ -n "$containers" ]; then
-        docker rm -f $containers
-        handle_error $? "Failed to remove some containers"
+
+    # Go to the compose file directory
+    compose_dir="${SCRIPT_DIR}/.."
+    if [ -f "${compose_dir}/docker-compose.yml" ]; then
+        cd "${compose_dir}" || {
+            error "Failed to change directory to ${compose_dir}"
+            return 1 # Indicate failure
+        }
+        log "Stopping containers defined in docker-compose.yml..."
+        docker compose down --remove-orphans # Use down to stop and remove
+        handle_error $? "Failed to stop or remove containers using docker compose down"
+        cd "${SCRIPT_DIR}" # Change back to original script dir
     else
-        debug "No n8n containers found to remove"
+        warn "docker-compose.yml not found in ${compose_dir}, attempting manual removal."
     fi
-    
-    log "Containers removed successfully"
+
+    # Fallback: Remove any remaining n8n related containers by pattern
+    # Use a broader pattern to catch all related containers
+    containers=$(docker ps -a --filter "name=n8n-" --format "{{.ID}}")
+    if [ -n "$containers" ]; then
+        log "Removing specific n8n-prefixed containers found..."
+        docker rm -f $containers
+        handle_error $? "Failed to remove some n8n-prefixed containers"
+    else
+        debug "No n8n-prefixed containers found for fallback removal."
+    fi
+
+    log "Container removal process finished."
 }
 
 # Function to remove images
 remove_images() {
     log "Removing n8n related images..."
-    
-    # Get container IDs for n8n-related containers
-    n8n_containers=$(docker ps -a --filter "name=n8n" --format "{{.ID}}")
-    
-    if [ -n "$n8n_containers" ]; then
-        # Get image IDs used by these containers
-        n8n_images=$(docker inspect --format='{{.Image}}' $n8n_containers | sort | uniq)
-        
-        if [ -n "$n8n_images" ]; then
-            docker rmi -f $n8n_images
-            handle_error $? "Failed to remove some images"
+
+    # Images defined in docker-compose.yml (including pinned versions)
+    images_to_remove=(
+        "postgres:16-alpine"
+        "n8nio/n8n:1.89.2"
+        "qdrant/qdrant:v1.8.3"
+        "traefik:v2.9"
+        "amazon/aws-cli:2.17.11" # Base image for backup-scheduler
+    )
+
+    # Attempt to find the custom-built image name
+    # Format is typically <directory_name>_<service_name>
+    # Directory name might need adjustment if script is run from elsewhere
+    compose_project_name=$(basename "${SCRIPT_DIR}/..")
+    custom_backup_image_name="${compose_project_name}_backup-scheduler"
+    # Docker compose V2 might use '-' instead of '_'
+    custom_backup_image_name_alt="${compose_project_name}-backup-scheduler"
+
+    # Add potential custom image names to the list
+    images_to_remove+=("${custom_backup_image_name}" "${custom_backup_image_name_alt}")
+
+    log "Attempting to remove the following images: ${images_to_remove[*]}"
+    for image in "${images_to_remove[@]}"; do
+        # Check if image exists before attempting removal
+        if docker image inspect "$image" &> /dev/null; then
+            docker rmi "$image"
+            # Don't treat error as fatal, image might be in use by other containers
+            if [ $? -ne 0 ]; then
+                warn "Could not remove image '$image'. It might be in use or already removed."
+            fi
+        else
+            debug "Image '$image' not found."
         fi
-    fi
-    
-    # Also remove any dangling n8n images that might not be associated with containers
-    dangling_n8n_images=$(docker images | grep 'n8nio/n8n' | awk '{print $3}')
+    done
+
+    # Fallback: Also remove any dangling n8n images
+    dangling_n8n_images=$(docker images --filter "dangling=true" --filter "reference=n8nio/n8n" --format "{{.ID}}")
     if [ -n "$dangling_n8n_images" ]; then
+        log "Removing dangling n8nio/n8n images..."
         docker rmi -f $dangling_n8n_images
-        handle_error $? "Failed to remove some dangling n8n images"
+        # Optional: handle error if needed
     fi
-    
-    log "Images removed successfully"
+
+    log "Image removal process finished."
 }
 
 # Function to remove volumes
@@ -134,23 +160,29 @@ remove_volumes() {
 # Function to remove networks
 remove_networks() {
     if [[ "$FORCE" != "true" ]]; then
-        read -p "Are you sure you want to remove all n8n networks? [y/N] " -n 1 -r
+        read -p "Are you sure you want to remove the n8n networks (n8n-network, traefik-public)? [y/N] " -n 1 -r
         echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
             log "Network removal cancelled"
             return
         fi
     fi
-    
-    log "Removing networks..."
-    networks=$(docker network ls | grep 'n8n-' | awk '{print $2}')
-    if [ -n "$networks" ]; then
-        docker network rm $networks
-        handle_error $? "Failed to remove some networks"
-    else
-        debug "No n8n networks found to remove"
-    fi
-    log "Networks removed successfully"
+
+    log "Removing networks (n8n-network, traefik-public)..."
+    networks_to_remove=("n8n-network" "traefik-public")
+    for network in "${networks_to_remove[@]}"; do
+         # Check if network exists before attempting removal
+        if docker network inspect "$network" &> /dev/null; then
+            docker network rm "$network"
+            if [ $? -ne 0 ]; then
+                warn "Could not remove network '$network'. It might be in use or already removed."
+            fi
+        else
+             debug "Network '$network' not found."
+        fi
+    done
+
+    log "Network removal process finished."
 }
 
 # Function to remove logs
@@ -168,41 +200,24 @@ remove_logs() {
 # Function to remove data directories
 remove_data() {
     if [[ "$FORCE" != "true" ]]; then
-        read -p "Are you sure you want to remove all n8n data directories? This cannot be undone! [y/N] " -n 1 -r
+        read -p "Are you sure you want to remove the entire n8n base data directory (${BASE_DIR})? This cannot be undone! [y/N] " -n 1 -r
         echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
             log "Data removal cancelled"
             return
         fi
     fi
-    
+
     if [ ! -d "$BASE_DIR" ]; then
         warn "Base directory $BASE_DIR does not exist, no data to remove"
         return
     fi
-    
-    log "Removing data directories..."
-    for dir in "n8n" "postgres" "qdrant" "n8n-backup" "postgres-backup" "qdrant-backup" "shared" "traefik"; do
-        if [ -d "${BASE_DIR}/${dir}" ]; then
-            safe_remove "${BASE_DIR}/${dir}"
-            handle_error $? "Failed to remove directory ${BASE_DIR}/${dir}"
-        else
-            debug "Directory ${BASE_DIR}/${dir} does not exist, skipping"
-        fi
-    done
-    log "Data directories removed successfully"
-}
 
-# Function to remove cron jobs
-remove_cron_jobs() {
-    log "Removing n8n related cron jobs..."
-    if command_exists crontab; then
-        (crontab -l 2>/dev/null | grep -v "n8n") | crontab -
-        handle_error $? "Failed to update crontab"
-    else
-        warn "crontab command not found, skipping cron job removal"
-    fi
-    log "Cron jobs removed successfully"
+    log "Removing base data directory: ${BASE_DIR}..."
+    safe_remove "${BASE_DIR}"
+    handle_error $? "Failed to remove base data directory ${BASE_DIR}"
+
+    log "Base data directory removed successfully."
 }
 
 # Function to display the main menu
@@ -219,13 +234,12 @@ display_main_menu() {
     echo "3) Remove volumes"
     echo "4) Remove networks"
     echo "5) Remove logs"
-    echo "6) Remove data directories"
-    echo "7) Remove cron jobs"
+    echo "6) Remove base data directory (${BASE_DIR})"
     echo "8) Remove everything (complete cleanup)"
     echo "9) Help"
     echo "0) Exit"
     echo ""
-    read -p "Enter your choice [0-9]: " main_choice
+    read -p "Enter your choice [0-9, excluding 7]: " main_choice
     
     case $main_choice in
         1) confirm_and_remove_containers ;;
@@ -234,7 +248,6 @@ display_main_menu() {
         4) confirm_and_remove_networks ;;
         5) confirm_and_remove_logs ;;
         6) confirm_and_remove_data ;;
-        7) confirm_and_remove_cron ;;
         8) confirm_and_remove_all ;;
         9) show_help_menu ;;
         0)
@@ -261,34 +274,31 @@ show_help_menu() {
     echo "This tool helps you remove n8n components and clean up your system:"
     echo ""
     echo "1. Remove containers"
-    echo "   - Stops and removes all n8n-related Docker containers"
+    echo "   - Stops and removes all n8n-related Docker containers using docker compose"
     echo "   - Does not affect your data or configuration"
     echo ""
     echo "2. Remove images"
-    echo "   - Removes Docker images used by n8n-related containers"
+    echo "   - Removes Docker images specified in docker-compose.yml and the custom built image"
     echo "   - Images can be re-downloaded when you run setup again"
     echo ""
     echo "3. Remove volumes"
-    echo "   - Removes Docker volumes containing n8n data"
-    echo "   - WARNING: This will delete data stored in Docker volumes"
+    echo "   - Removes Docker volumes prefixed with 'n8n-' (e.g., n8n_storage, postgres_storage)"
+    echo "   - WARNING: This will delete data stored ONLY in these Docker volumes"
     echo ""
     echo "4. Remove networks"
-    echo "   - Removes Docker networks created for n8n"
+    echo "   - Removes Docker networks 'n8n-network' and 'traefik-public'"
     echo "   - Networks will be recreated when you run setup again"
     echo ""
     echo "5. Remove logs"
-    echo "   - Deletes log files from the n8n data directory"
+    echo "   - Deletes *.log files from the n8n base data directory (${BASE_DIR})"
     echo ""
-    echo "6. Remove data directories"
-    echo "   - Deletes all data directories in $BASE_DIR"
-    echo "   - WARNING: This will permanently delete all your n8n data"
-    echo ""
-    echo "7. Remove cron jobs"
-    echo "   - Removes any n8n-related cron jobs"
+    echo "6. Remove base data directory"
+    echo "   - Deletes the entire base data directory: ${BASE_DIR}"
+    echo "   - WARNING: This will permanently delete ALL persistent data (configs, db, etc.)"
     echo ""
     echo "8. Remove everything"
-    echo "   - Performs a complete cleanup of all n8n components"
-    echo "   - WARNING: This will permanently delete all your n8n data"
+    echo "   - Performs a complete cleanup of all n8n components listed above"
+    echo "   - WARNING: This will permanently delete all your n8n data and volumes"
     echo ""
     echo "Press Enter to return to the main menu..."
     read
@@ -449,30 +459,6 @@ confirm_and_remove_data() {
     display_main_menu
 }
 
-confirm_and_remove_cron() {
-    clear
-    echo "╔════════════════════════════════════════════╗"
-    echo "║           Remove Cron Jobs                 ║"
-    echo "╚════════════════════════════════════════════╝"
-    echo ""
-    echo "This will remove all n8n-related cron jobs."
-    echo ""
-    read -p "Continue with cron job removal? [Y/n]: " confirm
-    if [[ ! "$confirm" =~ ^[Nn] ]]; then
-        remove_cron_jobs
-        echo ""
-        echo "Cron job removal completed."
-    else
-        echo ""
-        echo "Operation cancelled."
-    fi
-    
-    echo ""
-    echo "Press Enter to return to the main menu..."
-    read
-    display_main_menu
-}
-
 confirm_and_remove_all() {
     clear
     echo "╔════════════════════════════════════════════╗"
@@ -484,9 +470,8 @@ confirm_and_remove_all() {
     echo "- Remove all related Docker images"
     echo "- Remove all Docker volumes"
     echo "- Remove all Docker networks"
-    echo "- Delete all log files"
-    echo "- Delete all data directories"
-    echo "- Remove all cron jobs"
+    echo "- Delete all log files in ${BASE_DIR}"
+    echo "- Delete the entire base data directory ${BASE_DIR}"
     echo ""
     echo "This operation cannot be undone and will result in complete data loss."
     echo ""
@@ -500,8 +485,6 @@ confirm_and_remove_all() {
         remove_networks
         remove_logs
         remove_data
-        remove_cron_jobs
-        
         echo ""
         echo "Complete cleanup finished successfully."
         echo ""
@@ -542,7 +525,6 @@ VOLUMES="false"
 NETWORKS="false"
 LOGS="false"
 DATA="false"
-CRON="false"
 
 # Check requirements
 check_requirements
@@ -577,10 +559,6 @@ while [[ "$#" -gt 0 ]]; do
             DATA="true"
             shift
             ;;
-        --cron)
-            CRON="true"
-            shift
-            ;;
         --force)
             FORCE="true"
             shift
@@ -608,7 +586,12 @@ if [ "$ALL" = "true" ]; then
     remove_networks
     remove_logs
     remove_data
-    remove_cron_jobs
+    echo ""
+    echo "Complete cleanup finished successfully."
+    echo ""
+    echo "Press Enter to return to the main menu..."
+    read
+    display_main_menu
 else
     [ "$CONTAINERS" = "true" ] && remove_containers
     [ "$IMAGES" = "true" ] && remove_images
@@ -616,7 +599,6 @@ else
     [ "$NETWORKS" = "true" ] && remove_networks
     [ "$LOGS" = "true" ] && remove_logs
     [ "$DATA" = "true" ] && remove_data
-    [ "$CRON" = "true" ] && remove_cron_jobs
 fi
 log "n8n cleanup completed successfully"
 

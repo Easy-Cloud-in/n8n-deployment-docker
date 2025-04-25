@@ -14,15 +14,15 @@ fi
 # Load environment variables
 if [[ -f "${SCRIPT_DIR}/s3.env" ]]; then
     source "${SCRIPT_DIR}/s3.env"
-elif [[ -f "/opt/n8n-data/s3.env" ]]; then
-    source "/opt/n8n-data/s3.env"
+elif [[ -f "${BASE_DIR}/s3.env" ]]; then
+    source "${BASE_DIR}/s3.env"
 else
     error "s3.env file not found"
 fi
 
 # Configuration
+BACKUP_ROOT="${BASE_DIR}"
 BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
-BACKUP_ROOT="/opt/n8n-data"
 TEMP_DIR="/tmp/n8n-backup-${BACKUP_DATE}"
 S3_BACKUP_PATH="s3://${S3_BUCKET_NAME}/backups/${BACKUP_DATE}"
 RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-7}

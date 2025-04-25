@@ -4,7 +4,7 @@ s3.env
 *.env
 
 # Backup directories and files
-/opt/n8n-data/
+n8n-data/
 **/n8n-backup/
 **/postgres-backup/
 **/qdrant-backup/

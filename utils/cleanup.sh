@@ -11,7 +11,7 @@ cleanup_logs() {
     local retention_days=${1:-$DEFAULT_LOG_RETENTION_DAYS}
     log "Cleaning logs older than $retention_days days..."
     
-    find /opt/n8n-data -name "*.log" -mtime "+$retention_days" -type f -exec rm -f {} \;
+    find "${BASE_DIR}" -name "*.log" -mtime "+$retention_days" -type f -exec rm -f {} \;
     log "Log cleanup completed"
 }
 

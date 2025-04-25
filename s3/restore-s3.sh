@@ -14,14 +14,14 @@ fi
 # Load environment variables
 if [[ -f "${SCRIPT_DIR}/s3.env" ]]; then
     source "${SCRIPT_DIR}/s3.env"
-elif [[ -f "/opt/n8n-data/s3.env" ]]; then
-    source "/opt/n8n-data/s3.env"
+elif [[ -f "${BASE_DIR}/s3.env" ]]; then
+    source "${BASE_DIR}/s3.env"
 else
     error "s3.env file not found"
 fi
 
 # Configuration
-BACKUP_ROOT="/opt/n8n-data"
+BACKUP_ROOT="${BASE_DIR}"
 COMPOSE_FILE="docker-compose.yml"
 TEMP_DIR="/tmp/n8n-restore-$(date +%Y%m%d_%H%M%S)"
 
